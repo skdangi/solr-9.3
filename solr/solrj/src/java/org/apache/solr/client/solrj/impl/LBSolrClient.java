@@ -56,8 +56,12 @@ import org.apache.solr.common.util.ExecutorUtil;
 import org.apache.solr.common.util.NamedList;
 import org.apache.solr.common.util.SolrNamedThreadFactory;
 import org.slf4j.MDC;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 public abstract class LBSolrClient extends SolrClient {
+
+  private static final Logger log = LoggerFactory.getLogger(LBSolrClient.class);
 
   // defaults
   protected static final Set<Integer> RETRY_CODES =
@@ -371,6 +375,14 @@ public abstract class LBSolrClient extends SolrClient {
         }
         // Enforce maxRetries: 0 = no retry, 1 = one retry, etc. -1 = unlimited
         if (req.getMaxRetries() >= 0 && attemptCount > req.getMaxRetries()) {
+          if (log.isWarnEnabled()) {
+            log.warn(
+                "Max retries exceeded for coordinator shard request: attemptCount={}, maxRetries={}, lastUrl={}, error={}",
+                attemptCount,
+                req.getMaxRetries(),
+                serverStr,
+                ex.getMessage());
+          }
           throw new SolrServerException(ex);
         }
       } finally {
@@ -452,6 +464,12 @@ public abstract class LBSolrClient extends SolrClient {
   protected abstract SolrClient getClient(String baseUrl);
 
   protected Exception addZombie(String serverStr, Exception e) {
+    if (log.isInfoEnabled()) {
+      log.info(
+          "Marked replica as zombie (will not be used for reads until alive check): url={}, error={}",
+          serverStr,
+          e.getMessage());
+    }
     ServerWrapper wrapper = createServerWrapper(serverStr);
     wrapper.standard = false;
     zombieServers.put(serverStr, wrapper);

@@ -163,20 +163,41 @@ class CloudReplicaSource implements ReplicaSource {
     } else {
       // Never route read traffic to TLOG replicas; only NRT and PULL are eligible for reads.
       // Each shard must have at least one NRT or PULL replica for search to succeed.
-      List<Replica> list =
+      List<Replica> active =
           slice.getReplicas().stream()
               .filter(replica -> replica.isActive(clusterState.getLiveNodes()))
+              .collect(Collectors.toList());
+      List<Replica> list =
+          active.stream()
               .filter(replica -> replica.getType() != Replica.Type.TLOG)
               .filter(
                   replica ->
                       !builder.onlyNrt || replica.getType() == Replica.Type.NRT)
               .collect(Collectors.toList());
+      if (log.isDebugEnabled()) {
+        long tlogExcluded = active.stream().filter(r -> r.getType() == Replica.Type.TLOG).count();
+        log.debug(
+            "Replica selection for read: collection={}, shard={}, activeReplicas={}, tlogExcluded={}, readEligible={}",
+            slice.getCollection(),
+            slice.getName(),
+            active.size(),
+            tlogExcluded,
+            list.size());
+      }
       if (list.isEmpty() && log.isWarnEnabled()) {
         log.warn(
             "No read-eligible replicas (NRT or PULL) for shard {} in collection {}; "
-                + "TLOG replicas are excluded from read traffic.",
+                + "TLOG replicas are excluded from read traffic. activeReplicas={}",
             slice.getName(),
-            slice.getCollection());
+            slice.getCollection(),
+            active.size());
+      }
+      if (!list.isEmpty() && log.isDebugEnabled()) {
+        log.debug(
+            "Read-eligible replicas for shard: collection={}, shard={}, count={}",
+            slice.getCollection(),
+            slice.getName(),
+            list.size());
       }
       builder.replicaListTransformer.transform(list);
       List<String> coreUrls = list.stream().map(Replica::getCoreUrl).collect(Collectors.toList());
