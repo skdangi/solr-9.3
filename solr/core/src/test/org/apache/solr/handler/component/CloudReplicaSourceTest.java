@@ -216,8 +216,7 @@ public class CloudReplicaSourceTest extends SolrTestCaseJ4 {
     ReplicaListTransformer replicaListTransformer = Mockito.mock(ReplicaListTransformer.class);
     AllowListUrlChecker checker = Mockito.mock(AllowListUrlChecker.class);
     ModifiableSolrParams params = new ModifiableSolrParams();
-    // the cluster state will have slice2 with two tlog replicas out of which the first one will be
-    // the leader
+    // the cluster state will have slice2 with two tlog replicas; TLOG is never used for reads
     try (ZkStateReader zkStateReader =
         ClusterStateMockUtil.buildClusterState("csrr*st2t2", "baseUrl1:8983_", "baseUrl2:8984_")) {
       CloudReplicaSource cloudReplicaSource =
@@ -243,10 +242,8 @@ public class CloudReplicaSourceTest extends SolrTestCaseJ4 {
                 cloudReplicaSource.getReplicasBySlice(i).get(0));
             break;
           case "slice2":
-            assertEquals(1, cloudReplicaSource.getReplicasBySlice(i).size());
-            assertEquals(
-                "http://baseUrl2:8984/slice2_replica3/",
-                cloudReplicaSource.getReplicasBySlice(i).get(0));
+            // TLOG replicas are never used for reads; slice2 has only TLOG so 0 read-eligible
+            assertEquals(0, cloudReplicaSource.getReplicasBySlice(i).size());
             break;
         }
       }
@@ -259,9 +256,7 @@ public class CloudReplicaSourceTest extends SolrTestCaseJ4 {
     AllowListUrlChecker checker = Mockito.mock(AllowListUrlChecker.class);
     ModifiableSolrParams params = new ModifiableSolrParams();
     params.set("collection", "collection1,collection2");
-    // the cluster state will have collection1 with slice2 with two tlog replicas out of which the
-    // first one will be the leader and collection2 with just a single slice and a tlog replica that
-    // will be leader
+    // collection1 slice2 has only TLOG; collection2 slice1 has only TLOG. TLOG is never used for reads.
     try (ZkStateReader zkStateReader =
         ClusterStateMockUtil.buildClusterState(
             "csrr*st2t2cst", "baseUrl1:8983_", "baseUrl2:8984_")) {
@@ -288,16 +283,12 @@ public class CloudReplicaSourceTest extends SolrTestCaseJ4 {
                 cloudReplicaSource.getReplicasBySlice(i).get(0));
             break;
           case "collection1_slice2":
-            assertEquals(1, cloudReplicaSource.getReplicasBySlice(i).size());
-            assertEquals(
-                "http://baseUrl2:8984/slice2_replica3/",
-                cloudReplicaSource.getReplicasBySlice(i).get(0));
+            // TLOG only -> 0 read-eligible replicas
+            assertEquals(0, cloudReplicaSource.getReplicasBySlice(i).size());
             break;
           case "collection2_slice1":
-            assertEquals(1, cloudReplicaSource.getReplicasBySlice(i).size());
-            assertEquals(
-                "http://baseUrl1:8983/slice1_replica5/",
-                cloudReplicaSource.getReplicasBySlice(i).get(0));
+            // TLOG only -> 0 read-eligible replicas
+            assertEquals(0, cloudReplicaSource.getReplicasBySlice(i).size());
             break;
         }
       }
