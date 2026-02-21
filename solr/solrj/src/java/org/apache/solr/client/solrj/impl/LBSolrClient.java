@@ -243,6 +243,11 @@ public abstract class LBSolrClient extends SolrClient {
     protected List<String> servers;
     protected int numDeadServersToTry;
     private final Integer numServersToTry;
+    /**
+     * Max number of retries on retryable error (try next URL). -1 = unlimited. 0 = no retry (mark
+     * zombie and return failure). 1 = try next URL once, etc.
+     */
+    private int maxRetries = -1;
 
     public Req(SolrRequest<?> request, List<String> servers) {
       this(request, servers, null);
@@ -253,6 +258,15 @@ public abstract class LBSolrClient extends SolrClient {
       this.servers = servers;
       this.numDeadServersToTry = servers.size();
       this.numServersToTry = numServersToTry;
+    }
+
+    /** -1 = unlimited retries; 0 = no retry; 1 = one retry (next URL); etc. */
+    public int getMaxRetries() {
+      return maxRetries;
+    }
+
+    public void setMaxRetries(int maxRetries) {
+      this.maxRetries = maxRetries;
     }
 
     public SolrRequest<?> getRequest() {
@@ -346,12 +360,18 @@ public abstract class LBSolrClient extends SolrClient {
         req.request instanceof IsUpdateRequest || ADMIN_PATHS.contains(req.request.getPath());
     ServerIterator serverIterator = new ServerIterator(req, zombieServers);
     String serverStr;
+    int attemptCount = 0;
     while ((serverStr = serverIterator.nextOrError(ex)) != null) {
+      attemptCount++;
       try {
         MDC.put("LBSolrClient.url", serverStr);
         ex = doRequest(serverStr, req, rsp, isNonRetryable, serverIterator.isServingZombieServer());
         if (ex == null) {
           return rsp; // SUCCESS
+        }
+        // Enforce maxRetries: 0 = no retry, 1 = one retry, etc. -1 = unlimited
+        if (req.getMaxRetries() >= 0 && attemptCount > req.getMaxRetries()) {
+          throw new SolrServerException(ex);
         }
       } finally {
         MDC.remove("LBSolrClient.url");

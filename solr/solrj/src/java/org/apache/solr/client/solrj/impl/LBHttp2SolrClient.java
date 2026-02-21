@@ -28,6 +28,7 @@ import java.util.List;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import org.apache.solr.client.solrj.ResponseParser;
 import org.apache.solr.client.solrj.SolrClient;
@@ -179,6 +180,7 @@ public class LBHttp2SolrClient extends LBSolrClient {
     asyncListener.onStart();
     final AtomicBoolean cancelled = new AtomicBoolean(false);
     AtomicReference<Cancellable> currentCancellable = new AtomicReference<>();
+    final AtomicInteger retriesDone = new AtomicInteger(0);
     RetryListener retryListener =
         new RetryListener() {
 
@@ -190,6 +192,7 @@ public class LBHttp2SolrClient extends LBSolrClient {
           @Override
           public void onFailure(Exception e, boolean retryReq) {
             if (retryReq) {
+              retriesDone.incrementAndGet();
               String url;
               try {
                 url = it.nextOrError(e);
@@ -204,7 +207,7 @@ public class LBHttp2SolrClient extends LBSolrClient {
                     return;
                   }
                   Cancellable cancellable =
-                      doRequest(url, req, rsp, isNonRetryable, it.isServingZombieServer(), this);
+                      doRequest(url, req, rsp, isNonRetryable, it.isServingZombieServer(), retriesDone, this);
                   currentCancellable.set(cancellable);
                 }
               } finally {
@@ -223,6 +226,7 @@ public class LBHttp2SolrClient extends LBSolrClient {
               rsp,
               isNonRetryable,
               it.isServingZombieServer(),
+              retriesDone,
               retryListener);
       currentCancellable.set(cancellable);
     } catch (SolrServerException e) {
@@ -250,6 +254,7 @@ public class LBHttp2SolrClient extends LBSolrClient {
       Rsp rsp,
       boolean isNonRetryable,
       boolean isZombie,
+      AtomicInteger retriesDone,
       RetryListener listener) {
     rsp.server = baseUrl;
     req.getRequest().setBasePath(baseUrl);
@@ -277,7 +282,9 @@ public class LBHttp2SolrClient extends LBSolrClient {
                   // we retry on 404 or 403 or 503 or 500
                   // unless it's an update - then we only retry on connect exception
                   if (!isNonRetryable && RETRY_CODES.contains(e.code())) {
-                    listener.onFailure((!isZombie) ? addZombie(baseUrl, e) : e, true);
+                    Exception toReport = (!isZombie) ? addZombie(baseUrl, e) : e;
+                    boolean retryReq = req.getMaxRetries() < 0 || retriesDone.get() < req.getMaxRetries();
+                    listener.onFailure(toReport, retryReq);
                   } else {
                     // Server is alive but the request was likely malformed or invalid
                     if (isZombie) {
@@ -287,22 +294,30 @@ public class LBHttp2SolrClient extends LBSolrClient {
                   }
                 } catch (SocketException e) {
                   if (!isNonRetryable || e instanceof ConnectException) {
-                    listener.onFailure((!isZombie) ? addZombie(baseUrl, e) : e, true);
+                    Exception toReport = (!isZombie) ? addZombie(baseUrl, e) : e;
+                    boolean retryReq = req.getMaxRetries() < 0 || retriesDone.get() < req.getMaxRetries();
+                    listener.onFailure(toReport, retryReq);
                   } else {
                     listener.onFailure(e, false);
                   }
                 } catch (SocketTimeoutException e) {
                   if (!isNonRetryable) {
-                    listener.onFailure((!isZombie) ? addZombie(baseUrl, e) : e, true);
+                    Exception toReport = (!isZombie) ? addZombie(baseUrl, e) : e;
+                    boolean retryReq = req.getMaxRetries() < 0 || retriesDone.get() < req.getMaxRetries();
+                    listener.onFailure(toReport, retryReq);
                   } else {
                     listener.onFailure(e, false);
                   }
                 } catch (SolrServerException e) {
                   Throwable rootCause = e.getRootCause();
                   if (!isNonRetryable && rootCause instanceof IOException) {
-                    listener.onFailure((!isZombie) ? addZombie(baseUrl, e) : e, true);
+                    Exception toReport = (!isZombie) ? addZombie(baseUrl, e) : e;
+                    boolean retryReq = req.getMaxRetries() < 0 || retriesDone.get() < req.getMaxRetries();
+                    listener.onFailure(toReport, retryReq);
                   } else if (isNonRetryable && rootCause instanceof ConnectException) {
-                    listener.onFailure((!isZombie) ? addZombie(baseUrl, e) : e, true);
+                    Exception toReport = (!isZombie) ? addZombie(baseUrl, e) : e;
+                    boolean retryReq = req.getMaxRetries() < 0 || retriesDone.get() < req.getMaxRetries();
+                    listener.onFailure(toReport, retryReq);
                   } else {
                     listener.onFailure(e, false);
                   }

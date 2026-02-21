@@ -126,6 +126,14 @@ public class HttpShardHandlerFactory extends ShardHandlerFactory
   // Configure if the threadpool favours fairness over throughput
   static final String INIT_FAIRNESS_POLICY = "fairnessPolicy";
 
+  /**
+   * Coordinator shard request retry count: 0 = no retry (mark zombie, return failure), 1 = try
+   * next URL once, etc. Only applies when this factory is used by the coordinator.
+   */
+  static final String SHARD_REQUEST_MAX_RETRIES = "shardRequestMaxRetries";
+
+  int shardRequestMaxRetries = 0;
+
   /** Get {@link ShardHandler} that uses the default http client. */
   @Override
   public ShardHandler getShardHandler() {
@@ -233,6 +241,8 @@ public class HttpShardHandlerFactory extends ShardHandlerFactory
             permittedLoadBalancerRequestsMaximumFraction,
             sb);
     this.accessPolicy = getParameter(args, INIT_FAIRNESS_POLICY, accessPolicy, sb);
+    this.shardRequestMaxRetries =
+        getParameter(args, SHARD_REQUEST_MAX_RETRIES, shardRequestMaxRetries, sb);
 
     if (args != null && args.get("shardsWhitelist") != null) {
       log.warn(
@@ -347,7 +357,10 @@ public class HttpShardHandlerFactory extends ShardHandlerFactory
     if (numServersToTry < this.permittedLoadBalancerRequestsMinimumAbsolute) {
       numServersToTry = this.permittedLoadBalancerRequestsMinimumAbsolute;
     }
-    return new LBSolrClient.Req(req, urls, numServersToTry);
+    LBSolrClient.Req lbReq = new LBSolrClient.Req(req, urls, numServersToTry);
+    // Coordinator: limit retries on retryable error (0 = no retry, 1 = try next URL once, etc.)
+    lbReq.setMaxRetries(shardRequestMaxRetries);
+    return lbReq;
   }
 
   /**
