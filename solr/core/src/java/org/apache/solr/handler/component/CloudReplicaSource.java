@@ -26,7 +26,6 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.function.Predicate;
 import java.util.stream.Collectors;
 import org.apache.solr.client.solrj.routing.ReplicaListTransformer;
 import org.apache.solr.client.solrj.util.ClientUtils;
@@ -162,19 +161,23 @@ class CloudReplicaSource implements ReplicaSource {
       // if partial results are acceptable
       return Collections.emptyList();
     } else {
-      final Predicate<Replica> isShardLeader =
-          new IsLeaderPredicate(
-              builder.zkStateReader, clusterState, slice.getCollection(), slice.getName());
+      // Never route read traffic to TLOG replicas; only NRT and PULL are eligible for reads.
+      // Each shard must have at least one NRT or PULL replica for search to succeed.
       List<Replica> list =
           slice.getReplicas().stream()
               .filter(replica -> replica.isActive(clusterState.getLiveNodes()))
+              .filter(replica -> replica.getType() != Replica.Type.TLOG)
               .filter(
                   replica ->
-                      !builder.onlyNrt
-                          || (replica.getType() == Replica.Type.NRT
-                              || (replica.getType() == Replica.Type.TLOG
-                                  && isShardLeader.test(replica))))
+                      !builder.onlyNrt || replica.getType() == Replica.Type.NRT)
               .collect(Collectors.toList());
+      if (list.isEmpty() && log.isWarnEnabled()) {
+        log.warn(
+            "No read-eligible replicas (NRT or PULL) for shard {} in collection {}; "
+                + "TLOG replicas are excluded from read traffic.",
+            slice.getName(),
+            slice.getCollection());
+      }
       builder.replicaListTransformer.transform(list);
       List<String> coreUrls = list.stream().map(Replica::getCoreUrl).collect(Collectors.toList());
       checkUrlsAllowList(builder.urlChecker, clusterState, shardsParam, coreUrls);
@@ -210,59 +213,6 @@ class CloudReplicaSource implements ReplicaSource {
   @Override
   public int getSliceCount() {
     return slices.length;
-  }
-
-  /**
-   * A predicate to test if a replica is the leader according to {@link
-   * ZkStateReader#getLeaderRetry(String, String)}.
-   *
-   * <p>The result of getLeaderRetry is cached in the first call so that subsequent tests are faster
-   * and do not block.
-   */
-  private static class IsLeaderPredicate implements Predicate<Replica> {
-    private final ZkStateReader zkStateReader;
-    private final ClusterState clusterState;
-    private final String collectionName;
-    private final String sliceName;
-    private Replica shardLeader = null;
-
-    public IsLeaderPredicate(
-        ZkStateReader zkStateReader,
-        ClusterState clusterState,
-        String collectionName,
-        String sliceName) {
-      this.zkStateReader = zkStateReader;
-      this.clusterState = clusterState;
-      this.collectionName = collectionName;
-      this.sliceName = sliceName;
-    }
-
-    @Override
-    public boolean test(Replica replica) {
-      if (shardLeader == null) {
-        try {
-          shardLeader = zkStateReader.getLeaderRetry(collectionName, sliceName);
-        } catch (InterruptedException e) {
-          throw new SolrException(
-              SolrException.ErrorCode.SERVICE_UNAVAILABLE,
-              "Exception finding leader for shard "
-                  + sliceName
-                  + " in collection "
-                  + collectionName,
-              e);
-        } catch (SolrException e) {
-          if (log.isDebugEnabled()) {
-            log.debug(
-                "Exception finding leader for shard {} in collection {}. Collection State: {}",
-                sliceName,
-                collectionName,
-                clusterState.getCollectionOrNull(collectionName));
-          }
-          throw e;
-        }
-      }
-      return replica.getName().equals(shardLeader.getName());
-    }
   }
 
   static class Builder {
