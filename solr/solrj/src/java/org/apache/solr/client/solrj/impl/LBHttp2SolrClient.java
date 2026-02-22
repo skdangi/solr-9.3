@@ -180,6 +180,12 @@ public class LBHttp2SolrClient extends LBSolrClient {
     Rsp rsp = new Rsp();
     boolean isNonRetryable =
         req.request instanceof IsUpdateRequest || ADMIN_PATHS.contains(req.request.getPath());
+    if (log.isDebugEnabled()) {
+      log.debug(
+          "Coordinator shard request start: maxRetries={}, numServers={}",
+          req.getMaxRetries(),
+          req.getServers() != null ? req.getServers().size() : 0);
+    }
     ServerIterator it = new ServerIterator(req, zombieServers);
     asyncListener.onStart();
     final AtomicBoolean cancelled = new AtomicBoolean(false);
@@ -195,6 +201,12 @@ public class LBHttp2SolrClient extends LBSolrClient {
 
           @Override
           public void onFailure(Exception e, boolean retryReq) {
+            // Enforce maxRetries in listener: with maxRetries=0 we must not retry (retriesDone stays 0).
+            if (retryReq
+                && req.getMaxRetries() >= 0
+                && retriesDone.get() >= req.getMaxRetries()) {
+              retryReq = false;
+            }
             if (retryReq) {
               retriesDone.incrementAndGet();
               String url;
