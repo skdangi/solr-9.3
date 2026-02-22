@@ -253,6 +253,12 @@ public abstract class LBSolrClient extends SolrClient {
      */
     private int maxRetries = -1;
 
+    /**
+     * Whether to mark a replica as zombie on retryable error. If false, replica is never marked
+     * zombie; load stays even and ZK cluster state is the only source of liveness. Default true.
+     */
+    private boolean markZombieOnError = true;
+
     public Req(SolrRequest<?> request, List<String> servers) {
       this(request, servers, null);
     }
@@ -271,6 +277,14 @@ public abstract class LBSolrClient extends SolrClient {
 
     public void setMaxRetries(int maxRetries) {
       this.maxRetries = maxRetries;
+    }
+
+    public boolean isMarkZombieOnError() {
+      return markZombieOnError;
+    }
+
+    public void setMarkZombieOnError(boolean markZombieOnError) {
+      this.markZombieOnError = markZombieOnError;
     }
 
     public SolrRequest<?> getRequest() {
@@ -425,7 +439,7 @@ public abstract class LBSolrClient extends SolrClient {
       // we retry on 404 or 403 or 503 or 500
       // unless it's an update - then we only retry on connect exception
       if (!isNonRetryable && RETRY_CODES.contains(e.code())) {
-        ex = (!isZombie) ? addZombie(baseUrl, e) : e;
+        ex = (req.isMarkZombieOnError() && !isZombie) ? addZombie(baseUrl, e) : e;
       } else {
         // Server is alive but the request was likely malformed or invalid
         if (isZombie) {
@@ -435,22 +449,22 @@ public abstract class LBSolrClient extends SolrClient {
       }
     } catch (SocketException e) {
       if (!isNonRetryable || e instanceof ConnectException) {
-        ex = (!isZombie) ? addZombie(baseUrl, e) : e;
+        ex = (req.isMarkZombieOnError() && !isZombie) ? addZombie(baseUrl, e) : e;
       } else {
         throw e;
       }
     } catch (SocketTimeoutException e) {
       if (!isNonRetryable) {
-        ex = (!isZombie) ? addZombie(baseUrl, e) : e;
+        ex = (req.isMarkZombieOnError() && !isZombie) ? addZombie(baseUrl, e) : e;
       } else {
         throw e;
       }
     } catch (SolrServerException e) {
       Throwable rootCause = e.getRootCause();
       if (!isNonRetryable && rootCause instanceof IOException) {
-        ex = (!isZombie) ? addZombie(baseUrl, e) : e;
+        ex = (req.isMarkZombieOnError() && !isZombie) ? addZombie(baseUrl, e) : e;
       } else if (isNonRetryable && rootCause instanceof ConnectException) {
-        ex = (!isZombie) ? addZombie(baseUrl, e) : e;
+        ex = (req.isMarkZombieOnError() && !isZombie) ? addZombie(baseUrl, e) : e;
       } else {
         throw e;
       }

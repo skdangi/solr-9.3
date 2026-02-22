@@ -286,12 +286,13 @@ public class LBHttp2SolrClient extends LBSolrClient {
                   // we retry on 404 or 403 or 503 or 500
                   // unless it's an update - then we only retry on connect exception
                   if (!isNonRetryable && RETRY_CODES.contains(e.code())) {
-                    Exception toReport = (!isZombie) ? addZombie(baseUrl, e) : e;
+                    boolean markZombie = req.isMarkZombieOnError() && !isZombie;
+                    Exception toReport = markZombie ? addZombie(baseUrl, e) : e;
                     boolean retryReq = req.getMaxRetries() < 0 || retriesDone.get() < req.getMaxRetries();
                     if (log.isInfoEnabled()) {
                       log.info(
                           "Coordinator shard request retryable error: url={}, code={}, markedZombie={}, retryReq={}, retriesDone={}, maxRetries={}",
-                          baseUrl, e.code(), !isZombie, retryReq, retriesDone.get(), req.getMaxRetries());
+                          baseUrl, e.code(), markZombie, retryReq, retriesDone.get(), req.getMaxRetries());
                     }
                     listener.onFailure(toReport, retryReq);
                   } else {
@@ -303,12 +304,13 @@ public class LBHttp2SolrClient extends LBSolrClient {
                   }
                 } catch (SocketException e) {
                   if (!isNonRetryable || e instanceof ConnectException) {
-                    Exception toReport = (!isZombie) ? addZombie(baseUrl, e) : e;
+                    boolean markZombie = req.isMarkZombieOnError() && !isZombie;
+                    Exception toReport = markZombie ? addZombie(baseUrl, e) : e;
                     boolean retryReq = req.getMaxRetries() < 0 || retriesDone.get() < req.getMaxRetries();
                     if (log.isInfoEnabled()) {
                       log.info(
                           "Coordinator shard request retryable error (SocketException): url={}, markedZombie={}, retryReq={}, retriesDone={}, maxRetries={}",
-                          baseUrl, !isZombie, retryReq, retriesDone.get(), req.getMaxRetries());
+                          baseUrl, markZombie, retryReq, retriesDone.get(), req.getMaxRetries());
                     }
                     listener.onFailure(toReport, retryReq);
                   } else {
@@ -316,12 +318,13 @@ public class LBHttp2SolrClient extends LBSolrClient {
                   }
                 } catch (SocketTimeoutException e) {
                   if (!isNonRetryable) {
-                    Exception toReport = (!isZombie) ? addZombie(baseUrl, e) : e;
+                    boolean markZombie = req.isMarkZombieOnError() && !isZombie;
+                    Exception toReport = markZombie ? addZombie(baseUrl, e) : e;
                     boolean retryReq = req.getMaxRetries() < 0 || retriesDone.get() < req.getMaxRetries();
                     if (log.isInfoEnabled()) {
                       log.info(
                           "Coordinator shard request retryable error (SocketTimeout): url={}, markedZombie={}, retryReq={}, retriesDone={}, maxRetries={}",
-                          baseUrl, !isZombie, retryReq, retriesDone.get(), req.getMaxRetries());
+                          baseUrl, markZombie, retryReq, retriesDone.get(), req.getMaxRetries());
                     }
                     listener.onFailure(toReport, retryReq);
                   } else {
@@ -330,21 +333,23 @@ public class LBHttp2SolrClient extends LBSolrClient {
                 } catch (SolrServerException e) {
                   Throwable rootCause = e.getRootCause();
                   if (!isNonRetryable && rootCause instanceof IOException) {
-                    Exception toReport = (!isZombie) ? addZombie(baseUrl, e) : e;
+                    boolean markZombie = req.isMarkZombieOnError() && !isZombie;
+                    Exception toReport = markZombie ? addZombie(baseUrl, e) : e;
                     boolean retryReq = req.getMaxRetries() < 0 || retriesDone.get() < req.getMaxRetries();
                     if (log.isInfoEnabled()) {
                       log.info(
                           "Coordinator shard request retryable error (SolrServerException/IOException): url={}, markedZombie={}, retryReq={}, retriesDone={}, maxRetries={}",
-                          baseUrl, !isZombie, retryReq, retriesDone.get(), req.getMaxRetries());
+                          baseUrl, markZombie, retryReq, retriesDone.get(), req.getMaxRetries());
                     }
                     listener.onFailure(toReport, retryReq);
                   } else if (isNonRetryable && rootCause instanceof ConnectException) {
-                    Exception toReport = (!isZombie) ? addZombie(baseUrl, e) : e;
+                    boolean markZombie = req.isMarkZombieOnError() && !isZombie;
+                    Exception toReport = markZombie ? addZombie(baseUrl, e) : e;
                     boolean retryReq = req.getMaxRetries() < 0 || retriesDone.get() < req.getMaxRetries();
                     if (log.isInfoEnabled()) {
                       log.info(
                           "Coordinator shard request retryable error (ConnectException): url={}, markedZombie={}, retryReq={}, retriesDone={}, maxRetries={}",
-                          baseUrl, !isZombie, retryReq, retriesDone.get(), req.getMaxRetries());
+                          baseUrl, markZombie, retryReq, retriesDone.get(), req.getMaxRetries());
                     }
                     listener.onFailure(toReport, retryReq);
                   } else {

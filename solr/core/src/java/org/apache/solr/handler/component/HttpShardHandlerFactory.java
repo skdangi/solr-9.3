@@ -132,7 +132,16 @@ public class HttpShardHandlerFactory extends ShardHandlerFactory
    */
   static final String SHARD_REQUEST_MAX_RETRIES = "shardRequestMaxRetries";
 
+  /**
+   * Whether to mark a replica as zombie on retryable error (timeout, 503, etc.). If false, never
+   * mark zombie; replica list from ZK cluster state is the only source of liveness, avoiding
+   * traffic spikes from one-off transient errors. Only applies when this factory is used by the
+   * coordinator.
+   */
+  static final String MARK_REPLICA_ZOMBIE_ON_SHARD_ERROR = "markReplicaZombieOnShardError";
+
   int shardRequestMaxRetries = 0;
+  boolean markReplicaZombieOnShardError = true;
 
   /** Get {@link ShardHandler} that uses the default http client. */
   @Override
@@ -243,6 +252,8 @@ public class HttpShardHandlerFactory extends ShardHandlerFactory
     this.accessPolicy = getParameter(args, INIT_FAIRNESS_POLICY, accessPolicy, sb);
     this.shardRequestMaxRetries =
         getParameter(args, SHARD_REQUEST_MAX_RETRIES, shardRequestMaxRetries, sb);
+    this.markReplicaZombieOnShardError =
+        getParameter(args, MARK_REPLICA_ZOMBIE_ON_SHARD_ERROR, markReplicaZombieOnShardError, sb);
 
     if (args != null && args.get("shardsWhitelist") != null) {
       log.warn(
@@ -360,6 +371,8 @@ public class HttpShardHandlerFactory extends ShardHandlerFactory
     LBSolrClient.Req lbReq = new LBSolrClient.Req(req, urls, numServersToTry);
     // Coordinator: limit retries on retryable error (0 = no retry, 1 = try next URL once, etc.)
     lbReq.setMaxRetries(shardRequestMaxRetries);
+    // Coordinator: whether to mark replica zombie on retryable error (false = trust ZK for liveness only)
+    lbReq.setMarkZombieOnError(markReplicaZombieOnShardError);
     return lbReq;
   }
 
