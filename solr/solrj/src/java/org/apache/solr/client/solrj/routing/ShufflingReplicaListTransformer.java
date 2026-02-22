@@ -19,19 +19,23 @@ package org.apache.solr.client.solrj.routing;
 import java.util.Collections;
 import java.util.List;
 import java.util.Random;
+import java.util.concurrent.atomic.AtomicLong;
 
 public class ShufflingReplicaListTransformer implements ReplicaListTransformer {
 
-  private final Random r;
+  /** Unique seed per call to avoid same-nanosecond collisions (correlated shuffle order). */
+  private static final AtomicLong seedCounter = new AtomicLong();
 
+  @SuppressWarnings("unused")
   public ShufflingReplicaListTransformer(Random r) {
-    this.r = r;
+    // r not used; transform() uses per-call Random to avoid contention.
   }
 
   @Override
   public <T> void transform(List<T> choices) {
     if (choices.size() > 1) {
-      Collections.shuffle(choices, r);
+      // Per-call Random with unique seed: no contention, no seed collision in tight loops.
+      Collections.shuffle(choices, new Random(seedCounter.getAndIncrement()));
     }
   }
 }
