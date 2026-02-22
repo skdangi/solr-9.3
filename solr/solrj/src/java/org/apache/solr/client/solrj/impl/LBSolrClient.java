@@ -28,14 +28,17 @@ import java.net.SocketTimeoutException;
 import java.net.URL;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Random;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -66,6 +69,8 @@ public abstract class LBSolrClient extends SolrClient {
   // defaults
   protected static final Set<Integer> RETRY_CODES =
       new HashSet<>(Arrays.asList(404, 403, 503, 500));
+  /** Unique seed for shuffling zombie fallback list so order tried is random. */
+  private static final AtomicLong zombieListShuffleSeed = new AtomicLong();
   private static final int NONSTANDARD_PING_LIMIT =
       5; // number of times we'll ping dead servers not in the server list
 
@@ -206,6 +211,10 @@ public abstract class LBSolrClient extends SolrClient {
       }
       if (serverStr == null && skipped != null) {
         if (skippedIt == null) {
+          // Shuffle zombie fallback list so we don't always try the same replica first.
+          if (skipped.size() > 1) {
+            Collections.shuffle(skipped, new Random(zombieListShuffleSeed.getAndIncrement()));
+          }
           skippedIt = skipped.iterator();
         }
         if (skippedIt.hasNext()) {
