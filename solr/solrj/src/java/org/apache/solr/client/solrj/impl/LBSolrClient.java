@@ -76,6 +76,18 @@ public abstract class LBSolrClient extends SolrClient {
 
   protected final Map<String, ServerWrapper> zombieServers = new ConcurrentHashMap<>();
 
+  /** Per-URL consecutive failure count; used to mark zombie only after x consecutive failures. */
+  protected final Map<String, AtomicInteger> consecutiveFailuresByUrl = new ConcurrentHashMap<>();
+
+  /**
+   * Interval for clearing stale entries in consecutiveFailuresByUrl so decommissioned replicas
+   * don't leak memory. Default 24 hours. Configurable via {@link
+   * #setConsecutiveFailureCleanupInterval(long, TimeUnit)}.
+   */
+  private volatile long consecutiveFailureCleanupIntervalMs =
+      TimeUnit.MILLISECONDS.convert(24, TimeUnit.HOURS);
+  private volatile long lastConsecutiveFailureCleanupTimeMs = 0;
+
   // changes to aliveServers are reflected in this array, no need to synchronize
   private volatile ServerWrapper[] aliveServerList = new ServerWrapper[0];
 
@@ -259,6 +271,12 @@ public abstract class LBSolrClient extends SolrClient {
      */
     private boolean markZombieOnError = true;
 
+    /**
+     * Mark replica zombie only after this many consecutive failures to that replica. 1 = mark on
+     * first failure (default). 0 or negative = never mark (same as markZombieOnError=false for this).
+     */
+    private int markReplicaZombieAfterConsecutiveFailures = 1;
+
     public Req(SolrRequest<?> request, List<String> servers) {
       this(request, servers, null);
     }
@@ -285,6 +303,14 @@ public abstract class LBSolrClient extends SolrClient {
 
     public void setMarkZombieOnError(boolean markZombieOnError) {
       this.markZombieOnError = markZombieOnError;
+    }
+
+    public int getMarkReplicaZombieAfterConsecutiveFailures() {
+      return markReplicaZombieAfterConsecutiveFailures;
+    }
+
+    public void setMarkReplicaZombieAfterConsecutiveFailures(int markReplicaZombieAfterConsecutiveFailures) {
+      this.markReplicaZombieAfterConsecutiveFailures = markReplicaZombieAfterConsecutiveFailures;
     }
 
     public SolrRequest<?> getRequest() {
@@ -433,13 +459,14 @@ public abstract class LBSolrClient extends SolrClient {
       if (isZombie) {
         zombieServers.remove(baseUrl);
       }
+      recordSuccess(baseUrl);
     } catch (BaseHttpSolrClient.RemoteExecutionException e) {
       throw e;
     } catch (SolrException e) {
       // we retry on 404 or 403 or 503 or 500
       // unless it's an update - then we only retry on connect exception
       if (!isNonRetryable && RETRY_CODES.contains(e.code())) {
-        ex = (req.isMarkZombieOnError() && !isZombie) ? addZombie(baseUrl, e) : e;
+        ex = (!isZombie && recordFailureAndShouldMarkZombie(baseUrl, req)) ? addZombie(baseUrl, e) : e;
       } else {
         // Server is alive but the request was likely malformed or invalid
         if (isZombie) {
@@ -449,22 +476,22 @@ public abstract class LBSolrClient extends SolrClient {
       }
     } catch (SocketException e) {
       if (!isNonRetryable || e instanceof ConnectException) {
-        ex = (req.isMarkZombieOnError() && !isZombie) ? addZombie(baseUrl, e) : e;
+        ex = (!isZombie && recordFailureAndShouldMarkZombie(baseUrl, req)) ? addZombie(baseUrl, e) : e;
       } else {
         throw e;
       }
     } catch (SocketTimeoutException e) {
       if (!isNonRetryable) {
-        ex = (req.isMarkZombieOnError() && !isZombie) ? addZombie(baseUrl, e) : e;
+        ex = (!isZombie && recordFailureAndShouldMarkZombie(baseUrl, req)) ? addZombie(baseUrl, e) : e;
       } else {
         throw e;
       }
     } catch (SolrServerException e) {
       Throwable rootCause = e.getRootCause();
       if (!isNonRetryable && rootCause instanceof IOException) {
-        ex = (req.isMarkZombieOnError() && !isZombie) ? addZombie(baseUrl, e) : e;
+        ex = (!isZombie && recordFailureAndShouldMarkZombie(baseUrl, req)) ? addZombie(baseUrl, e) : e;
       } else if (isNonRetryable && rootCause instanceof ConnectException) {
-        ex = (req.isMarkZombieOnError() && !isZombie) ? addZombie(baseUrl, e) : e;
+        ex = (!isZombie && recordFailureAndShouldMarkZombie(baseUrl, req)) ? addZombie(baseUrl, e) : e;
       } else {
         throw e;
       }
@@ -477,6 +504,28 @@ public abstract class LBSolrClient extends SolrClient {
 
   protected abstract SolrClient getClient(String baseUrl);
 
+  /**
+   * Records a failure for the given URL and returns true if we should mark this replica as zombie
+   * (i.e. consecutive failures have reached the configured threshold). Call only on retryable
+   * failure. When markZombieOnError is false or threshold is <= 0, returns false.
+   */
+  protected boolean recordFailureAndShouldMarkZombie(String baseUrl, Req req) {
+    if (!req.isMarkZombieOnError() || req.getMarkReplicaZombieAfterConsecutiveFailures() <= 0) {
+      return false;
+    }
+    cleanupStaleConsecutiveFailuresIfDue();
+    int count =
+        consecutiveFailuresByUrl
+            .computeIfAbsent(baseUrl, k -> new AtomicInteger(0))
+            .incrementAndGet();
+    return count >= req.getMarkReplicaZombieAfterConsecutiveFailures();
+  }
+
+  /** Records success for the given URL; resets its consecutive failure count. */
+  protected void recordSuccess(String baseUrl) {
+    consecutiveFailuresByUrl.remove(baseUrl);
+  }
+
   protected Exception addZombie(String serverStr, Exception e) {
     if (log.isInfoEnabled()) {
       log.info(
@@ -487,6 +536,7 @@ public abstract class LBSolrClient extends SolrClient {
     ServerWrapper wrapper = createServerWrapper(serverStr);
     wrapper.standard = false;
     zombieServers.put(serverStr, wrapper);
+    consecutiveFailuresByUrl.remove(serverStr);
     startAliveCheckExecutor();
     return e;
   }
@@ -535,8 +585,35 @@ public abstract class LBSolrClient extends SolrClient {
         for (Object zombieServer : lb.zombieServers.values()) {
           lb.checkAZombieServer((ServerWrapper) zombieServer);
         }
+        // Prevent memory leak: replicas removed from cluster never get recordSuccess/addZombie
+        lb.cleanupStaleConsecutiveFailures();
       }
     };
+  }
+
+  /**
+   * Clears consecutiveFailuresByUrl periodically so URLs of decommissioned replicas don't leak.
+   * Safe to call from the alive-check thread or from request threads; clears at most once per
+   * cleanup interval.
+   */
+  protected void cleanupStaleConsecutiveFailures() {
+    cleanupStaleConsecutiveFailuresIfDue();
+  }
+
+  private void cleanupStaleConsecutiveFailuresIfDue() {
+    long now = System.currentTimeMillis();
+    if (now - lastConsecutiveFailureCleanupTimeMs > consecutiveFailureCleanupIntervalMs) {
+      consecutiveFailuresByUrl.clear();
+      lastConsecutiveFailureCleanupTimeMs = now;
+    }
+  }
+
+  /**
+   * Sets the interval for clearing stale entries in consecutiveFailuresByUrl (to avoid memory leak
+   * when replicas are decommissioned). Default is 24 hours.
+   */
+  public void setConsecutiveFailureCleanupInterval(long amount, TimeUnit unit) {
+    this.consecutiveFailureCleanupIntervalMs = unit.toMillis(amount);
   }
 
   public ResponseParser getParser() {

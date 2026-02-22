@@ -140,8 +140,25 @@ public class HttpShardHandlerFactory extends ShardHandlerFactory
    */
   static final String MARK_REPLICA_ZOMBIE_ON_SHARD_ERROR = "markReplicaZombieOnShardError";
 
+  /**
+   * Mark replica zombie only after this many consecutive failures to that replica. 1 = mark on
+   * first failure. 0 or negative = never mark. Only applies when this factory is used by the
+   * coordinator.
+   */
+  static final String MARK_REPLICA_ZOMBIE_AFTER_CONSECUTIVE_FAILURES =
+      "markReplicaZombieAfterConsecutiveFailures";
+
+  /**
+   * Interval (in minutes) for clearing stale consecutive-failure state so decommissioned replicas
+   * don't leak memory. Default 1440 (24 hours).
+   */
+  static final String CONSECUTIVE_FAILURE_CLEANUP_INTERVAL_MINUTES =
+      "consecutiveFailureCleanupIntervalMinutes";
+
   int shardRequestMaxRetries = 0;
   boolean markReplicaZombieOnShardError = true;
+  int markReplicaZombieAfterConsecutiveFailures = 1;
+  int consecutiveFailureCleanupIntervalMinutes = 1440; // 24 hours
 
   /** Get {@link ShardHandler} that uses the default http client. */
   @Override
@@ -254,6 +271,18 @@ public class HttpShardHandlerFactory extends ShardHandlerFactory
         getParameter(args, SHARD_REQUEST_MAX_RETRIES, shardRequestMaxRetries, sb);
     this.markReplicaZombieOnShardError =
         getParameter(args, MARK_REPLICA_ZOMBIE_ON_SHARD_ERROR, markReplicaZombieOnShardError, sb);
+    this.markReplicaZombieAfterConsecutiveFailures =
+        getParameter(
+            args,
+            MARK_REPLICA_ZOMBIE_AFTER_CONSECUTIVE_FAILURES,
+            markReplicaZombieAfterConsecutiveFailures,
+            sb);
+    this.consecutiveFailureCleanupIntervalMinutes =
+        getParameter(
+            args,
+            CONSECUTIVE_FAILURE_CLEANUP_INTERVAL_MINUTES,
+            consecutiveFailureCleanupIntervalMinutes,
+            sb);
 
     if (args != null && args.get("shardsWhitelist") != null) {
       log.warn(
@@ -309,6 +338,8 @@ public class HttpShardHandlerFactory extends ShardHandlerFactory
             .build();
     this.defaultClient.addListenerFactory(this.httpListenerFactory);
     this.loadbalancer = new LBHttp2SolrClient.Builder(defaultClient).build();
+    this.loadbalancer.setConsecutiveFailureCleanupInterval(
+        consecutiveFailureCleanupIntervalMinutes, TimeUnit.MINUTES);
 
     initReplicaListTransformers(getParameter(args, "replicaRouting", null, sb));
 
@@ -373,6 +404,8 @@ public class HttpShardHandlerFactory extends ShardHandlerFactory
     lbReq.setMaxRetries(shardRequestMaxRetries);
     // Coordinator: whether to mark replica zombie on retryable error (false = trust ZK for liveness only)
     lbReq.setMarkZombieOnError(markReplicaZombieOnShardError);
+    // Coordinator: mark zombie only after this many consecutive failures to that replica (1 = first failure)
+    lbReq.setMarkReplicaZombieAfterConsecutiveFailures(markReplicaZombieAfterConsecutiveFailures);
     return lbReq;
   }
 

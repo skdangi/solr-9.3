@@ -273,6 +273,7 @@ public class LBHttp2SolrClient extends LBSolrClient {
                 if (isZombie) {
                   zombieServers.remove(baseUrl);
                 }
+                recordSuccess(baseUrl);
                 listener.onSuccess(rsp);
               }
 
@@ -286,7 +287,7 @@ public class LBHttp2SolrClient extends LBSolrClient {
                   // we retry on 404 or 403 or 503 or 500
                   // unless it's an update - then we only retry on connect exception
                   if (!isNonRetryable && RETRY_CODES.contains(e.code())) {
-                    boolean markZombie = req.isMarkZombieOnError() && !isZombie;
+                    boolean markZombie = !isZombie && recordFailureAndShouldMarkZombie(baseUrl, req);
                     Exception toReport = markZombie ? addZombie(baseUrl, e) : e;
                     boolean retryReq = req.getMaxRetries() < 0 || retriesDone.get() < req.getMaxRetries();
                     if (log.isInfoEnabled()) {
@@ -304,7 +305,7 @@ public class LBHttp2SolrClient extends LBSolrClient {
                   }
                 } catch (SocketException e) {
                   if (!isNonRetryable || e instanceof ConnectException) {
-                    boolean markZombie = req.isMarkZombieOnError() && !isZombie;
+                    boolean markZombie = !isZombie && recordFailureAndShouldMarkZombie(baseUrl, req);
                     Exception toReport = markZombie ? addZombie(baseUrl, e) : e;
                     boolean retryReq = req.getMaxRetries() < 0 || retriesDone.get() < req.getMaxRetries();
                     if (log.isInfoEnabled()) {
@@ -318,7 +319,7 @@ public class LBHttp2SolrClient extends LBSolrClient {
                   }
                 } catch (SocketTimeoutException e) {
                   if (!isNonRetryable) {
-                    boolean markZombie = req.isMarkZombieOnError() && !isZombie;
+                    boolean markZombie = !isZombie && recordFailureAndShouldMarkZombie(baseUrl, req);
                     Exception toReport = markZombie ? addZombie(baseUrl, e) : e;
                     boolean retryReq = req.getMaxRetries() < 0 || retriesDone.get() < req.getMaxRetries();
                     if (log.isInfoEnabled()) {
@@ -333,7 +334,7 @@ public class LBHttp2SolrClient extends LBSolrClient {
                 } catch (SolrServerException e) {
                   Throwable rootCause = e.getRootCause();
                   if (!isNonRetryable && rootCause instanceof IOException) {
-                    boolean markZombie = req.isMarkZombieOnError() && !isZombie;
+                    boolean markZombie = !isZombie && recordFailureAndShouldMarkZombie(baseUrl, req);
                     Exception toReport = markZombie ? addZombie(baseUrl, e) : e;
                     boolean retryReq = req.getMaxRetries() < 0 || retriesDone.get() < req.getMaxRetries();
                     if (log.isInfoEnabled()) {
@@ -343,7 +344,7 @@ public class LBHttp2SolrClient extends LBSolrClient {
                     }
                     listener.onFailure(toReport, retryReq);
                   } else if (isNonRetryable && rootCause instanceof ConnectException) {
-                    boolean markZombie = req.isMarkZombieOnError() && !isZombie;
+                    boolean markZombie = !isZombie && recordFailureAndShouldMarkZombie(baseUrl, req);
                     Exception toReport = markZombie ? addZombie(baseUrl, e) : e;
                     boolean retryReq = req.getMaxRetries() < 0 || retriesDone.get() < req.getMaxRetries();
                     if (log.isInfoEnabled()) {
